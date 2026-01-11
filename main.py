@@ -1,4 +1,5 @@
 import os
+import random
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import google.generativeai as genai
@@ -6,13 +7,18 @@ from fastapi.middleware.cors import CORSMiddleware
 
 # -------------------------------------------------
 # 1. API CONFIGURATION
-# Set your API Key in Render/Environment Variables as GEMINI_API_KEY
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+# Set your API Keys in Render/Environment Variables as GEMINI_API_KEY1, GEMINI_API_KEY2, GEMINI_API_KEY3
+GEMINI_API_KEYS = [
+    os.environ.get("GEMINI_API_KEY1"),
+    os.environ.get("GEMINI_API_KEY2"),
+    os.environ.get("GEMINI_API_KEY3")
+]
 
-if not GEMINI_API_KEY:
-    print("CRITICAL: GEMINI_API_KEY missing! Set it in Render Dashboard.")
+# Filter out None or empty keys
+GEMINI_API_KEYS = [key for key in GEMINI_API_KEYS if key]
 
-genai.configure(api_key=GEMINI_API_KEY)
+if not GEMINI_API_KEYS:
+    print("CRITICAL: No GEMINI_API_KEYS found! Set them in Render Dashboard.")
 
 app = FastAPI(title="AI Match Predictor ⚽")
 
@@ -50,10 +56,12 @@ OUTPUT STRUCTURE
 
 # -------------------------------------------------
 # 3. INITIALIZE MODEL (Updated to working Gemini model)
-model = genai.GenerativeModel(
-    model_name="models/gemini-2.5-flash",  # Working model
-    system_instruction=SYSTEM_PROMPT
-)
+def get_model(api_key):
+    genai.configure(api_key=api_key)
+    return genai.GenerativeModel(
+        model_name="models/gemini-2.5-flash",  # Working model
+        system_instruction=SYSTEM_PROMPT
+    )
 
 # -------------------------------------------------
 # 4. INPUT MODEL
@@ -86,30 +94,44 @@ TASK:
 4. Mention assumptions made if real-time data is unavailable
 """
 
-    try:
-        # Generate prediction using Gemini
-        response = model.generate_content(prompt)
-
-        return {
-            "match": f"{input_data.team_a} vs {input_data.team_b}",
-            "prediction": response.text,
-            "disclaimer": "This prediction is AI-generated based on general football knowledge. Not guaranteed."
-        }
-    except Exception as e:
-        error_msg = str(e)
-        if "429" in error_msg:
+    # Shuffle the keys for random selection
+    api_keys = GEMINI_API_KEYS.copy()
+    random.shuffle(api_keys)
+    
+    last_error = None
+    for api_key in api_keys:
+        try:
+            model = get_model(api_key)
+            # Generate prediction using Gemini
+            response = model.generate_content(prompt)
             return {
-                "prediction": "AI is currently rate-limited. Please wait a few seconds and try again.",
-                "error": error_msg
+                "match": f"{input_data.team_a} vs {input_data.team_b}",
+                "prediction": response.text,
+                "disclaimer": "This prediction is AI-generated based on general football knowledge. Not guaranteed."
             }
+        except Exception as e:
+            last_error = str(e)
+            if "429" in last_error:
+                # Rate limit, try next key
+                continue
+            else:
+                # Other error, but still try next
+                continue
+    
+    # If all keys fail
+    if "429" in last_error:
         return {
-            "prediction": "AI failed to generate a prediction.",
-            "error": error_msg
+            "prediction": "All AI keys are currently rate-limited. Please wait a few seconds and try again.",
+            "error": last_error
         }
+    return {
+        "prediction": "AI failed to generate a prediction with all available keys.",
+        "error": last_error
+    }
 
 # -------------------------------------------------
 # 6. RUN SERVER
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.environ.get("PORT", 8000, 8000))
+    port = int(os.environ.get("PORT", 8000))
     uvicorn.run(app, host="0.0.0.0", port=port)
