@@ -1,26 +1,16 @@
-import os
 import requests
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from dotenv import load_dotenv
 import google.generativeai as genai
+import os
 
 # -----------------------------
-# LOAD ENVIRONMENT VARIABLES
+# GEMINI CONFIG
 # -----------------------------
-load_dotenv()
-
-SPORTDB_API_KEY = os.getenv("SPORTDB_API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-
-if not SPORTDB_API_KEY:
-    raise RuntimeError("SPORTDB_API_KEY missing in .env")
 if not GEMINI_API_KEY:
-    raise RuntimeError("GEMINI_API_KEY missing in .env")
+    raise RuntimeError("GEMINI_API_KEY missing in environment")
 
-# -----------------------------
-# CONFIGURE GEMINI
-# -----------------------------
 genai.configure(api_key=GEMINI_API_KEY)
 
 SYSTEM_PROMPT = """
@@ -41,7 +31,7 @@ model = genai.GenerativeModel(
 # -----------------------------
 # FASTAPI APP
 # -----------------------------
-app = FastAPI(title="Football Match Prediction Engine ⚽")
+app = FastAPI(title="Football Match Prediction Engine ⚽ (OpenLigaDB)")
 
 # -----------------------------
 # REQUEST MODEL
@@ -49,58 +39,60 @@ app = FastAPI(title="Football Match Prediction Engine ⚽")
 class MatchRequest(BaseModel):
     team_a: str
     team_b: str
+    league_shortcut: str = "bl1"  # Default Bundesliga 1
 
 # -----------------------------
-# SPORTDB HELPER FUNCTIONS
+# OPENLIGADB HELPERS
 # -----------------------------
-BASE_URL = "https://www.thesportsdb.com/api/v1/json"
+BASE_URL = "https://www.openligadb.de/api"
 
-def get_team(team_name: str):
+def get_teams(league_shortcut: str):
+    url = f"{BASE_URL}/getavailableteams/{league_shortcut}/2026"
     try:
-        url = f"{BASE_URL}/{SPORTDB_API_KEY}/searchteams.php"
-        r = requests.get(url, params={"t": team_name}, timeout=10)
-        data = r.json()
-        if not data or not data.get("teams"):
-            return None
-        return data["teams"][0]
-    except Exception:
-        return None
-
-def get_last_matches(team_id: str):
-    try:
-        url = f"{BASE_URL}/{SPORTDB_API_KEY}/eventslast.php"
-        r = requests.get(url, params={"id": team_id}, timeout=10)
-        return r.json().get("results", []) or []
+        r = requests.get(url, timeout=10)
+        return r.json()
     except Exception:
         return []
 
-def calculate_form(matches, team_name):
-    form = {"W": 0, "D": 0, "L": 0}
-    for m in matches[:5]:
-        try:
-            if m["intHomeScore"] is None or m["intAwayScore"] is None:
-                continue
-            hs = int(m["intHomeScore"])
-            as_ = int(m["intAwayScore"])
-            home = m["strHomeTeam"]
-            away = m["strAwayTeam"]
+def get_team_id(team_name: str, teams_list: list):
+    # Case-insensitive match
+    for t in teams_list:
+        if t["TeamName"].lower() == team_name.lower():
+            return t["TeamId"], t["TeamName"]
+    return None, None
 
-            if team_name == home:
-                if hs > as_:
-                    form["W"] += 1
-                elif hs == as_:
-                    form["D"] += 1
-                else:
-                    form["L"] += 1
-            elif team_name == away:
-                if as_ > hs:
-                    form["W"] += 1
-                elif as_ == hs:
-                    form["D"] += 1
-                else:
-                    form["L"] += 1
-        except Exception:
-            continue
+def get_matches(league_shortcut: str):
+    url = f"{BASE_URL}/getmatchdata/{league_shortcut}/2026"
+    try:
+        r = requests.get(url, timeout=10)
+        return r.json()
+    except Exception:
+        return []
+
+def calculate_form(team_id: int, matches: list):
+    form = {"W": 0, "D": 0, "L": 0}
+    last5 = [m for m in matches if m["MatchIsFinished"]][:5]
+
+    for m in last5:
+        home_id = m["Team1"]["TeamId"]
+        away_id = m["Team2"]["TeamId"]
+        hs = m["MatchResults"][0]["PointsTeam1"]
+        as_ = m["MatchResults"][0]["PointsTeam2"]
+
+        if team_id == home_id:
+            if hs > as_:
+                form["W"] += 1
+            elif hs == as_:
+                form["D"] += 1
+            else:
+                form["L"] += 1
+        elif team_id == away_id:
+            if as_ > hs:
+                form["W"] += 1
+            elif as_ == hs:
+                form["D"] += 1
+            else:
+                form["L"] += 1
     return form
 
 # -----------------------------
@@ -108,40 +100,34 @@ def calculate_form(matches, team_name):
 # -----------------------------
 @app.get("/")
 def home():
-    return {"status": "Football Match Predictor is running ⚽"}
+    return {"status": "Football Match Predictor (OpenLigaDB) is running ⚽"}
 
 @app.post("/predict")
 def predict_match(data: MatchRequest):
-    # GET TEAMS
-    team_a = get_team(data.team_a)
-    team_b = get_team(data.team_b)
-    if not team_a or not team_b:
+    teams_list = get_teams(data.league_shortcut)
+    if not teams_list:
+        raise HTTPException(status_code=500, detail="Could not fetch teams from OpenLigaDB")
+
+    # Get team IDs
+    team_a_id, team_a_name = get_team_id(data.team_a, teams_list)
+    team_b_id, team_b_name = get_team_id(data.team_b, teams_list)
+
+    if not team_a_id or not team_b_id:
         raise HTTPException(status_code=404, detail="One or both teams not found")
 
-    # GET LAST MATCHES
-    team_a_matches = get_last_matches(team_a["idTeam"])
-    team_b_matches = get_last_matches(team_b["idTeam"])
+    # Get all matches in league
+    all_matches = get_matches(data.league_shortcut)
 
-    # PREPARE TEAM DATA
-    team_a_data = {
-        "name": team_a["strTeam"],
-        "league": team_a.get("strLeague", "Unknown"),
-        "stadium": team_a.get("strStadium", "Unknown"),
-        "form": calculate_form(team_a_matches, team_a["strTeam"])
-    }
-    team_b_data = {
-        "name": team_b["strTeam"],
-        "league": team_b.get("strLeague", "Unknown"),
-        "stadium": team_b.get("strStadium", "Unknown"),
-        "form": calculate_form(team_b_matches, team_b["strTeam"])
-    }
+    # Calculate form
+    team_a_form = calculate_form(team_a_id, all_matches)
+    team_b_form = calculate_form(team_b_id, all_matches)
 
-    # PREPARE PROMPT FOR AI
+    # Prepare AI prompt
     prompt = f"""
 MATCH ANALYSIS DATA
 
-TEAM A: {team_a_data}
-TEAM B: {team_b_data}
+TEAM A: Name: {team_a_name}, Recent Form (last 5 matches): {team_a_form}
+TEAM B: Name: {team_b_name}, Recent Form (last 5 matches): {team_b_form}
 
 TASK:
 1. Predict Win/Draw/Loss probabilities
@@ -149,16 +135,15 @@ TASK:
 3. Explain reasoning clearly in bullet points
 """
 
-    # CALL GEMINI AI
+    # Call Gemini AI
     try:
         ai_response = model.generate_content(prompt)
         ai_text = ai_response.text
     except Exception:
         ai_text = "Prediction temporarily unavailable. Please try again later."
 
-    # RETURN RESPONSE
     return {
-        "match": f"{team_a_data['name']} vs {team_b_data['name']}",
+        "match": f"{team_a_name} vs {team_b_name}",
         "prediction": ai_text,
         "disclaimer": "This is an analytical prediction based on recent stats. No guarantees."
     }
@@ -168,5 +153,4 @@ TASK:
 # -----------------------------
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.getenv("PORT", 8000)) if os.getenv("PORT") else 8000
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    uvicorn.run(app, host="0.0.0.0", port=8000)
