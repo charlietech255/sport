@@ -1,6 +1,7 @@
 import requests
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
+from datetime import datetime
 import google.generativeai as genai
 import os
 
@@ -46,53 +47,59 @@ class MatchRequest(BaseModel):
 # -----------------------------
 BASE_URL = "https://www.openligadb.de/api"
 
-def get_teams(league_shortcut: str):
-    url = f"{BASE_URL}/getavailableteams/{league_shortcut}/2026"
+def get_teams(league_shortcut: str, season: int):
     try:
+        url = f"{BASE_URL}/getavailableteams/{league_shortcut}/{season}"
         r = requests.get(url, timeout=10)
-        return r.json()
+        return r.json() or []
     except Exception:
         return []
 
 def get_team_id(team_name: str, teams_list: list):
-    # Case-insensitive match
     for t in teams_list:
         if t["TeamName"].lower() == team_name.lower():
             return t["TeamId"], t["TeamName"]
     return None, None
 
-def get_matches(league_shortcut: str):
-    url = f"{BASE_URL}/getmatchdata/{league_shortcut}/2026"
+def get_matches(league_shortcut: str, season: int):
     try:
+        url = f"{BASE_URL}/getmatchdata/{league_shortcut}/{season}"
         r = requests.get(url, timeout=10)
-        return r.json()
+        return r.json() or []
     except Exception:
         return []
 
 def calculate_form(team_id: int, matches: list):
     form = {"W": 0, "D": 0, "L": 0}
-    last5 = [m for m in matches if m["MatchIsFinished"]][:5]
+    # Only finished matches with results
+    last5 = [m for m in matches if m["MatchIsFinished"] and m.get("MatchResults")]
+    for m in last5[:5]:
+        try:
+            result = m["MatchResults"][0]
+            hs = result["PointsTeam1"]
+            as_ = result["PointsTeam2"]
+            home_id = m["Team1"]["TeamId"]
+            away_id = m["Team2"]["TeamId"]
 
-    for m in last5:
-        home_id = m["Team1"]["TeamId"]
-        away_id = m["Team2"]["TeamId"]
-        hs = m["MatchResults"][0]["PointsTeam1"]
-        as_ = m["MatchResults"][0]["PointsTeam2"]
+            if hs is None or as_ is None:
+                continue
 
-        if team_id == home_id:
-            if hs > as_:
-                form["W"] += 1
-            elif hs == as_:
-                form["D"] += 1
-            else:
-                form["L"] += 1
-        elif team_id == away_id:
-            if as_ > hs:
-                form["W"] += 1
-            elif as_ == hs:
-                form["D"] += 1
-            else:
-                form["L"] += 1
+            if team_id == home_id:
+                if hs > as_:
+                    form["W"] += 1
+                elif hs == as_:
+                    form["D"] += 1
+                else:
+                    form["L"] += 1
+            elif team_id == away_id:
+                if as_ > hs:
+                    form["W"] += 1
+                elif as_ == hs:
+                    form["D"] += 1
+                else:
+                    form["L"] += 1
+        except Exception:
+            continue
     return form
 
 # -----------------------------
@@ -104,21 +111,24 @@ def home():
 
 @app.post("/predict")
 def predict_match(data: MatchRequest):
-    teams_list = get_teams(data.league_shortcut)
+    # Use dynamic current year
+    current_year = datetime.now().year
+
+    # Fetch teams
+    teams_list = get_teams(data.league_shortcut, current_year)
     if not teams_list:
         raise HTTPException(status_code=500, detail="Could not fetch teams from OpenLigaDB")
 
     # Get team IDs
     team_a_id, team_a_name = get_team_id(data.team_a, teams_list)
     team_b_id, team_b_name = get_team_id(data.team_b, teams_list)
-
     if not team_a_id or not team_b_id:
         raise HTTPException(status_code=404, detail="One or both teams not found")
 
-    # Get all matches in league
-    all_matches = get_matches(data.league_shortcut)
+    # Fetch matches
+    all_matches = get_matches(data.league_shortcut, current_year)
 
-    # Calculate form
+    # Calculate form safely
     team_a_form = calculate_form(team_a_id, all_matches)
     team_b_form = calculate_form(team_b_id, all_matches)
 
@@ -135,11 +145,12 @@ TASK:
 3. Explain reasoning clearly in bullet points
 """
 
-    # Call Gemini AI
+    # Call Gemini AI safely
     try:
         ai_response = model.generate_content(prompt)
         ai_text = ai_response.text
-    except Exception:
+    except Exception as e:
+        print("Gemini Error:", e)
         ai_text = "Prediction temporarily unavailable. Please try again later."
 
     return {
