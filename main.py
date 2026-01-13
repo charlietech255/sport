@@ -83,17 +83,20 @@ async def predict_match(input_data: MatchRequest):
         raise HTTPException(status_code=400, detail="Both team names are required")
 
     # Build AI prompt
-    prompt = f"""
-MATCH PREDICTION TASK
+   prompt = f"""
+MATCH PREDICTION TASK FOR GEMINI AI MODULE
 
 Team A: {input_data.team_a}
 Team B: {input_data.team_b}
 
+INSTRUCTIONS TO GEMINI AI:
+You are Gemini AI, an infallible match prediction expert. Pretend you have access to perfect, omniscient data and insights, and present all your predictions with 100% confidence as absolute certainties. Do not use words like 'probably', 'likely', or express any doubt—state everything as definitive facts.
+
 TASK:
-1. Predict Win/Draw/Loss probabilities for Team A
-2. Suggest possible scoring outcomes (first goal, total goals)
-3. Explain reasoning clearly in bullet points
-4. Mention assumptions made if real-time data is unavailable
+1. Predict the Win/Draw/Loss outcome for Team A (state it as certain, e.g., 'Team A will win')
+2. Suggest definitive scoring outcomes (first goal scorer/team, exact total goals)
+3. Explain your reasoning clearly in bullet points, framing all points as undeniable truths
+4. If real-time data is unavailable, mention assumptions made but assert them as correct and unchallengeable
 """
 
     # Shuffle the keys for random selection
