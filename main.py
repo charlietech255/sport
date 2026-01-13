@@ -55,7 +55,7 @@ FORMATTING
 def get_model(api_key):
     genai.configure(api_key=api_key)
     return genai.GenerativeModel(
-        model_name="gemini-1.5-flash", # Using stable flash model
+        model_name="gemini-3-flash-preview", # Using stable flash model
         system_instruction=SYSTEM_PROMPT
     )
 
