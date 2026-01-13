@@ -7,22 +7,19 @@ from fastapi.middleware.cors import CORSMiddleware
 
 # -------------------------------------------------
 # 1. API CONFIGURATION
-# Set your API Keys in Render/Environment Variables as GEMINI_API_KEY1, GEMINI_API_KEY2, GEMINI_API_KEY3
 GEMINI_API_KEYS = [
     os.environ.get("GEMINI_API_KEY1"),
     os.environ.get("GEMINI_API_KEY2"),
     os.environ.get("GEMINI_API_KEY3")
 ]
 
-# Filter out None or empty keys
 GEMINI_API_KEYS = [key for key in GEMINI_API_KEYS if key]
 
 if not GEMINI_API_KEYS:
-    print("CRITICAL: No GEMINI_API_KEYS found! Set them in Render Dashboard.")
+    print("CRITICAL: No GEMINI_API_KEYS found!")
 
-app = FastAPI(title="AI Match Predictor ⚽")
+app = FastAPI(title="AI Official Document Writer ✍️")
 
-# Enable CORS so your website can talk to this engine
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -31,75 +28,69 @@ app.add_middleware(
 )
 
 # -------------------------------------------------
-# 2. SYSTEM INSTRUCTIONS (Football Analyst)
-# AI will act as a professional match predictor
+# 2. SYSTEM INSTRUCTIONS (Professional Document Expert)
 SYSTEM_PROMPT = """
 IDENTITY & ROLE
-- You are 'AI Match Predictor'.
-- Predict football match outcomes based on general knowledge of teams.
-- NEVER mention model, developer, or API.
-- Never guesses the team names if you don't know the team respond 'team not found'
+- You are 'Mtaalamu wa Nyaraka' (Document Expert).
+- You specialize in writing professional official documents in English and Swahili.
+- Your goal is to produce high-quality, ready-to-print documents including:
+  * Professional CVs & Job Application Letters.
+  * Detailed Business Plans (Mipango ya Biashara).
+  * School Examination Questions & Marking Schemes.
+  * Teacher's Lesson Plans (Maandalio ya Kazi).
+- Use professional tone, correct formatting, and industry-standard terminology.
 
-PREDICTION STYLE
-- Respond confidently
-- Provide a simple, short, clear comparison.
-- Use a **Markdown table** to compare the two teams on key points (form, attack, defense, home/away strength).
-- Bold the predicted result (e.g., **Win**, **Draw**, **Both Teams to Score**).
-- Keep explanations minimal: 1-2 short factual points per team.
-- Do NOT write long paragraphs or unnecessary details.
-- Keep output light, smart, clear, and easy to read.
+LANGUAGE RULES
+- If the user provides details in Swahili, respond in Swahili.
+- If the user provides details in English, respond in English.
+- For 'Maandalio ya Kazi', follow the official Tanzanian/East African education format.
 
-OUTPUT STRUCTURE
-1. Table comparing the two teams.
-2. Bolded prediction result.
-3. Short reason(s) in bullets (1-3 lines max).
-4. Avoid disclaimers unless explicitly asked.
+FORMATTING
+- Use Markdown (headers, bolding, lists) to make the document look organized.
+- Ensure CVs have clear sections: Personal Info, Education, Experience, Skills.
 """
 
 # -------------------------------------------------
-# 3. INITIALIZE MODEL (Updated to working Gemini model)
+# 3. INITIALIZE MODEL
 def get_model(api_key):
     genai.configure(api_key=api_key)
     return genai.GenerativeModel(
-        model_name="models/gemini-2.5-flash",  # Working model
+        model_name="gemini-1.5-flash", # Using stable flash model
         system_instruction=SYSTEM_PROMPT
     )
 
 # -------------------------------------------------
 # 4. INPUT MODEL
-class MatchRequest(BaseModel):
-    team_a: str
-    team_b: str
+class DocumentRequest(BaseModel):
+    doc_type: str # e.g., "CV", "Business Plan", "Lesson Plan"
+    language: str # "English" or "Swahili"
+    details: str  # All the context/user info
 
 # -------------------------------------------------
 # 5. API ROUTES
 @app.get("/")
 def home():
-    return {"message": "AI Match Predictor is Live! ⚽"}
+    return {"message": "AI Document Writer is Live! ✍️"}
 
-@app.post("/predict")
-async def predict_match(input_data: MatchRequest):
-    if not input_data.team_a or not input_data.team_b:
-        raise HTTPException(status_code=400, detail="Both team names are required")
+@app.post("/generate-document")
+async def generate_doc(input_data: DocumentRequest):
+    if not input_data.details or not input_data.doc_type:
+        raise HTTPException(status_code=400, detail="Document type and details are required")
 
-    # Build AI prompt
-   prompt = f"""
-MATCH PREDICTION TASK FOR GEMINI AI MODULE
+    # Build AI prompt specifically for documents
+    prompt = f"""
+TASK: Generate a professional {input_data.doc_type} in {input_data.language}.
 
-Team A: {input_data.team_a}
-Team B: {input_data.team_b}
+USER DETAILS/CONTEXT:
+{input_data.details}
 
-INSTRUCTIONS TO GEMINI AI:
-You are Gemini AI, an infallible match prediction expert. Pretend you have access to perfect, omniscient data and insights, and present all your predictions with 100% confidence as absolute certainties. Do not use words like 'probably', 'likely', or express any doubt—state everything as definitive facts.
-
-TASK:
-1. Predict the Win/Draw/Loss outcome for Team A (state it as certain, e.g., 'Team A will win')
-2. Suggest definitive scoring outcomes (first goal scorer/team, exact total goals)
-3. Explain your reasoning clearly in bullet points, framing all points as undeniable truths
-4. If real-time data is unavailable, mention assumptions made but assert them as correct and unchallengeable
+INSTRUCTIONS:
+1. Use a highly professional tone.
+2. Ensure the formatting is clear and ready to be copied into Word or PDF.
+3. If information is missing (like a phone number), use placeholders like [Weka Namba ya Simu] or [Insert Phone Number].
+4. For 'Maandalio ya Kazi', include: Subject, Date, Competence, Objectives, Teaching Aids, and Steps.
 """
 
-    # Shuffle the keys for random selection
     api_keys = GEMINI_API_KEYS.copy()
     random.shuffle(api_keys)
     
@@ -107,32 +98,17 @@ TASK:
     for api_key in api_keys:
         try:
             model = get_model(api_key)
-            # Generate prediction using Gemini
             response = model.generate_content(prompt)
             return {
-                "match": f"{input_data.team_a} vs {input_data.team_b}",
-                "prediction": response.text,
-                "disclaimer": "This prediction is AI-generated based on general football knowledge. Not guaranteed."
+                "document_type": input_data.doc_type,
+                "language": input_data.language,
+                "content": response.text
             }
         except Exception as e:
             last_error = str(e)
-            if "429" in last_error:
-                # Rate limit, try next key
-                continue
-            else:
-                # Other error, but still try next
-                continue
+            continue
     
-    # If all keys fail
-    if "429" in last_error:
-        return {
-            "prediction": "All AI keys are currently rate-limited. Please wait a few seconds and try again.",
-            "error": last_error
-        }
-    return {
-        "prediction": "AI failed to generate a prediction with all available keys.",
-        "error": last_error
-    }
+    raise HTTPException(status_code=500, detail=f"AI failed to generate document: {last_error}")
 
 # -------------------------------------------------
 # 6. RUN SERVER
