@@ -45,7 +45,7 @@ chat_sessions = {}
 def get_model(api_key):
     genai.configure(api_key=api_key)
     return genai.GenerativeModel(
-        model_name="gemini-1.5-flash", # Stable and fast for short replies
+        model_name="gemini-3-flash", # Stable and fast for short replies
         system_instruction=SYSTEM_PROMPT
     )
 
