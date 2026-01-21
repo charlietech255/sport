@@ -47,7 +47,7 @@ async def chat(input_data: ChatInput):
         try:
             genai.configure(api_key=key)
             model = genai.GenerativeModel(
-                model_name="gemini-1.5-flash",
+                model_name="gemma-3-12b",
                 system_instruction=SYSTEM_PROMPT
             )
             response = model.generate_content(input_data.message)
