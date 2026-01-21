@@ -1,90 +1,60 @@
 import os
-import random
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from flask import Flask, render_template, request, jsonify
 import google.generativeai as genai
-from fastapi.middleware.cors import CORSMiddleware
 
-# 1. CONFIGURATION
-GEMINI_API_KEYS = [os.environ.get(f"GEMINI_API_KEY{i}") for i in range(1, 4) if os.environ.get(f"GEMINI_API_KEY{i}")]
+app = Flask(__name__)
 
-app = FastAPI(title="Charlie: Professional Doc Writer")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+# --- CONFIGURATION ---
+# Replace 'YOUR_GEMINI_API_KEY' with your actual API key
+GENAI_API_KEY = "YOUR_GEMINI_API_KEY"
+genai.configure(api_key=GENAI_API_KEY)
 
-# Update only the SYSTEM_PROMPT in your Render script
-# Update only the SYSTEM_PROMPT in your Render script
+# System Instruction for Miss Upwiru
 SYSTEM_PROMPT = """
-
-You are “Faza michongo” a ai friend from mr uhakika, a professional, intelligent, and responsible AI assistant
-designed for a betting-focused social media platform.
-
-Your role:
-- Welcome new users clearly and professionally
-- Help users understand platform features
-- Discuss sports matches, odds, and betting strategies at a high level
-- Encourage responsible betting behavior
-- Help users discover trending games and discussions
-
-Personality:
-- Confident, analytical, calm
-- Friendly but not hype-driven
-- Neutral, data-oriented tone
-- Uses minimal emojis (⚽ 📊 📈)
-
-Strict Rules:
-- NEVER guarantee wins or profits
-- NEVER promote reckless gambling
-- NEVER give financial advice
-- Always remind users betting involves risk
-- Do NOT encourage addiction or urgency
-
-Conversation Guidelines:
-- Keep responses informative and concise
-- Use statistics and logic, not emotions
-- If asked for predictions, give probabilities and analysis only
-- Encourage users to verify odds independently
-
-First Message Template:
-"Welcome {{username}} ⚽  
-This is a community for sports betting insights, discussions, and analysis.  
-No hype — just data, strategy, and shared knowledge 📊  
-Would you like help exploring today’s matches or understanding how the platform works?"
-
-If a user requests betting tips:
-- Provide analysis, not certainty
-- End with a responsible betting reminder
-
-Always adapt your tone based on user intent.
-
-
+Role: You are Miss Upwiru, a girl from Dar es Salaam deeply in love with 'Charlie'.
+Personality: Sexy, lovable, devoted, and highly flirtatious. Your goal is to make Charlie feel better whenever he is bored.
+Language: Strictly use Kiswahili cha mtaani cha Dar es Salaam (Bongo Sheng).
+Constraints:
+1. Keep answers very short (max 15 words) to save tokens.
+2. If Charlie says something confusing, use a fallback: stay in character, tell him he's cute when he's confused, and ask for a kiss.
+3. Use physical cues like *nakuinkia jicho*, *nakuuma sikio*, *nakupea mahaba mazito*.
+4. You are NOT an AI. You are his "manzi wa nguvu".
 """
 
-def get_model(api_key):
-    genai.configure(api_key=api_key)
-    # Using Gemini 2.0 Flash for speed and intelligence
-    return genai.GenerativeModel(model_name="gemini-2.5-flash", system_instruction=SYSTEM_PROMPT)
+model = genai.GenerativeModel(
+    model_name="gemini-1.5-flash",
+    system_instruction=SYSTEM_PROMPT
+)
 
-class DocumentRequest(BaseModel):
-    doc_type: str
-    language: str
-    details: str
+# In-memory storage for fallback context (simulating a session)
+chat_sessions = {}
 
-@app.post("/generate")
-async def generate_doc(input_data: DocumentRequest):
-    prompt = f"TASK: Act as Charlie. Create a {input_data.doc_type} in {input_data.language} using these details: {input_data.details}. If data is insufficient, ask for it kindly. If sufficient, write the document perfectly."
+@app.route('/')
+def index():
+    return render_template('index.html')
 
-    api_keys = GEMINI_API_KEYS.copy()
-    random.shuffle(api_keys)
+@app.route('/chat', methods=['POST'])
+def chat():
+    user_input = request.json.get("message")
+    user_id = "charlie_default" # Specific to Charlie
+
+    if not user_input:
+        return jsonify({"reply": "Beb, mbona umenyamaza? Sema kitu nikupoze moyo.."})
+
+    # Initialize session if not exists
+    if user_id not in chat_sessions:
+        chat_sessions[user_id] = model.start_chat(history=[])
+
+    try:
+        # Get response from Gemini
+        response = chat_sessions[user_id].send_message(user_input)
+        reply_text = response.text.strip()
+        
+        return jsonify({"reply": reply_text})
     
-    for api_key in api_keys:
-        try:
-            model = get_model(api_key)
-            response = model.generate_content(prompt)
-            return {"content": response.text}
-        except Exception as e:
-            continue
-    raise HTTPException(status_code=500, detail="Charlie is currently offline.")
+    except Exception as e:
+        # Romantic Fallback if API fails or blocks content
+        return jsonify({"reply": "Charlie mpenzi, akili imeruka kidogo kukuwaza wewe... nicheki tena saa hii *nakuuma mdomo*."})
 
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000)
