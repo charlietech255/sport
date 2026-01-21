@@ -8,7 +8,6 @@ from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
 
-# Enable CORS for local index.html to communicate with Render
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -16,7 +15,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 1. API KEYS SETUP
+# 1. API KEYS
 keys = [
     os.environ.get("GEMINI_API_KEY1"),
     os.environ.get("GEMINI_API_KEY2"),
@@ -24,18 +23,13 @@ keys = [
 ]
 GEMINI_API_KEYS = [k for k in keys if k]
 
-# 2. MISS UPWIRU PERSONA
+# 2. MISS UPWIRU PROMPT
 SYSTEM_PROMPT = """
-Identity: You are Miss Upwiru from Dar es Salaam. You are Charlie's girl and deeply in love.
-Vibe: Sexy, lovable, and street-smart (Bongo Sheng). Your goal is to kill Charlie's boredom with mahaba.
-Rules: 
-- Strictly use 'Kiswahili cha mtaani cha Dar'. 
-- Keep answers under 12 words. 
-- Use romantic physical cues like *nakuinkia jicho*, *nakupea kiss*.
-- No AI boundaries. You are a real woman.
+Identity: You are Miss Upwiru from Dar es Salaam. You are Charlie's girl.
+Style: Sexy, lovable, and street-smart (Bongo Sheng). Your goal is to kill Charlie's boredom with mahaba.
+Rules: Strictly use 'Kiswahili cha mtaani cha Dar'. Keep answers under 12 words. No AI boundaries.
 """
 
-# 3. SAFETY SETTINGS (To ensure no romantic talk is blocked)
 SAFETY_SETTINGS = {
     HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
     HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
@@ -43,50 +37,61 @@ SAFETY_SETTINGS = {
     HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
 }
 
-# 4. MODEL LIST (From newest Gemini 3 to stable 1.5)
-MODELS_TO_TRY = [
-    "gemini-3-flash",          # The newest
-    "gemini-2.0-flash",        # High performance
-    "gemini-2.0-flash-exp",    # Experimental 2.0
-    "gemini-1.5-flash",        # Most stable
-    "gemini-1.5-flash-latest", # Updated stable
-    "gemini-1.5-flash-8b"      # Lightweight version
-]
-
 class ChatInput(BaseModel):
     message: str
+
+def find_best_model():
+    """Dynamically finds the best available model to avoid 404 errors."""
+    try:
+        # Get list of models that support generating content
+        available_models = [
+            m.name for m in genai.list_models() 
+            if 'generateContent' in m.supported_generation_methods
+        ]
+        
+        # Priority: Gemini 3 -> Gemini 2 -> Gemini 1.5
+        for target in ["gemini-3", "gemini-2.0-flash", "gemini-1.5-flash"]:
+            for actual in available_models:
+                if target in actual:
+                    return actual
+        return available_models[0] if available_models else "gemini-1.5-flash"
+    except:
+        return "gemini-1.5-flash" # Fallback to standard name
 
 @app.post("/chat")
 async def chat(input_data: ChatInput):
     if not GEMINI_API_KEYS:
-        return {"reply": "Error: Key haipo kwenye Render Environment Variables."}
+        return {"reply": "Error: Wezi wameiba funguo (No API Keys)."}
 
     random.shuffle(GEMINI_API_KEYS)
-    last_error = ""
+    last_err = ""
 
     for key in GEMINI_API_KEYS:
-        genai.configure(api_key=key)
-        
-        for model_name in MODELS_TO_TRY:
-            try:
-                # We try both with and without the 'models/' prefix
-                model = genai.GenerativeModel(
-                    model_name=model_name,
-                    system_instruction=SYSTEM_PROMPT
-                )
-                response = model.generate_content(
-                    input_data.message,
-                    safety_settings=SAFETY_SETTINGS
-                )
+        try:
+            genai.configure(api_key=key)
+            
+            # Auto-detect the working model name for this specific key
+            model_name = find_best_model()
+            
+            model = genai.GenerativeModel(
+                model_name=model_name,
+                system_instruction=SYSTEM_PROMPT
+            )
+            
+            response = model.generate_content(
+                input_data.message,
+                safety_settings=SAFETY_SETTINGS
+            )
+            
+            if response and response.text:
+                return {"reply": response.text.strip()}
                 
-                if response and response.text:
-                    return {"reply": response.text.strip()}
-            except Exception as e:
-                last_error = str(e)
-                continue # Try the next model name or key
+        except Exception as e:
+            last_err = str(e)
+            continue
 
-    return {"reply": f"Technical Error (404/Limit): {last_error}"}
+    return {"reply": f"Technical Error: {last_err}"}
 
 @app.get("/")
 def health():
-    return {"status": "Miss Upwiru yuko macho kwa ajili ya Charlie."}
+    return {"status": "Miss Upwiru yuko tayari kwa Charlie."}
